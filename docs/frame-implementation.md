@@ -1,287 +1,367 @@
-# Dungeons and DeFi - Farcaster Frame v2 Implementation Guide
+# Dungeons and DeFi - Farcaster Frame v2 Implementation
 
 ## Project Setup
 
-### Dependencies
 ```bash
+# Create Next.js app
 yarn create next-app dungeons-and-defi
+cd dungeons-and-defi
+
+# Install Frame SDK
 yarn add @farcaster/frame-sdk
-yarn add wagmi viem@2.x @tanstack/react-query
 ```
 
-### Core Components Structure
+## Basic Frame Structure
 
 ```typescript
-// Project structure
-src/
-  app/
-    layout.tsx      // Root layout with providers
-    page.tsx        // Main game frame
-    providers.tsx   // Wagmi and other providers
-  components/
-    providers/
-      WagmiProvider.tsx
-    game/
-      QuestBoard.tsx
-      Combat.tsx
-      Character.tsx
-  lib/
-    connector.ts    // Farcaster wallet connector
-```
-
-## Frame Implementation
-
-### Base Layout (app/layout.tsx)
-```typescript
-import { Providers } from '~/app/providers';
-
-export const metadata = {
-  title: 'Dungeons and DeFi',
-  description: 'Web3 RPG in Farcaster Frames'
-};
-
-export default function RootLayout({
-  children
-}: {
-  children: React.ReactNode;
-}) {
+// app/page.tsx
+export default function Home() {
   return (
-    <html lang="en">
-      <body>
-        <Providers>{children}</Providers>
-      </body>
-    </html>
+    <>
+      <head>
+        <title>Dungeons and DeFi</title>
+        <meta property="fc:frame" content="vNext" />
+        <meta property="fc:frame:image" content="https://your-domain.com/api/frame/image" />
+        <meta property="fc:frame:button:1" content="Start Game" />
+        <meta property="fc:frame:button:2" content="How to Play" />
+        <meta property="fc:frame:button:3" content="Leaderboard" />
+        <meta property="fc:frame:button:4" content="About" />
+        <meta property="fc:frame:post_url" content="https://your-domain.com/api/frame" />
+      </head>
+    </>
   );
 }
 ```
 
-### Main Game Component (app/page.tsx)
+## Frame API Route
+
 ```typescript
-'use client';
+// app/api/frame/route.ts
+import { NextRequest } from 'next/server';
+import { getFrameMessage } from '@farcaster/frame-sdk';
 
-import { useEffect, useState } from 'react';
-import sdk, { type FrameContext } from '@farcaster/frame-sdk';
-
-export default function GameFrame() {
-  const [isSDKLoaded, setIsSDKLoaded] = useState(false);
-  const [context, setContext] = useState<FrameContext>();
-  
-  useEffect(() => {
-    const initializeFrame = async () => {
-      setContext(await sdk.context);
-      sdk.actions.ready();
-    };
-
-    if (sdk && !isSDKLoaded) {
-      setIsSDKLoaded(true);
-      initializeFrame();
+export async function POST(req: NextRequest) {
+  try {
+    // Validate frame message
+    const frameMessage = await getFrameMessage(req);
+    if (!frameMessage) {
+      return new Response('Invalid frame message', { status: 400 });
     }
-  }, [isSDKLoaded]);
 
-  // Frame rendering based on game state
-  return (
-    <div className="w-[1200px] h-[630px]">
-      {/* Dynamic game content */}
-    </div>
-  );
+    // Get game state
+    const state = await getGameState(frameMessage.interactor.fid);
+
+    // Process the button click
+    const { newState, imageUrl } = await processGameAction({
+      action: frameMessage.button,
+      state,
+      fid: frameMessage.interactor.fid
+    });
+
+    // Return new frame
+    return new Response(
+      `<!DOCTYPE html>
+      <html>
+        <head>
+          <title>Dungeons and DeFi</title>
+          <meta property="fc:frame" content="vNext" />
+          <meta property="fc:frame:image" content="${imageUrl}" />
+          ${newState.buttons.map((button, i) => 
+            `<meta property="fc:frame:button:${i + 1}" content="${button}" />`
+          ).join('')}
+          <meta property="fc:frame:post_url" content="https://your-domain.com/api/frame" />
+        </head>
+      </html>`,
+      {
+        headers: {
+          'Content-Type': 'text/html',
+        },
+      }
+    );
+  } catch (error) {
+    console.error('Frame error:', error);
+    return new Response('Error processing frame action', { status: 500 });
+  }
 }
 ```
 
 ## Game State Management
 
-### Frame Context
 ```typescript
+// lib/gameState.ts
 interface GameState {
-  currentScene: 'CHARACTER_CREATE' | 'QUEST_BOARD' | 'COMBAT' | 'INVENTORY';
+  scene: 'MAIN_MENU' | 'CHARACTER_CREATION' | 'QUEST_BOARD' | 'COMBAT';
   character?: {
     id: string;
     class: string;
     level: number;
-    experience: number;
   };
   currentQuest?: {
     id: string;
     progress: number;
   };
+  buttons: string[];
+}
+
+async function getGameState(fid: string): Promise<GameState> {
+  // Get state from your database
+  const state = await db.get(`game:${fid}`);
+  return state || {
+    scene: 'MAIN_MENU',
+    buttons: ['Start Game', 'How to Play', 'Leaderboard', 'About']
+  };
+}
+
+async function saveGameState(fid: string, state: GameState) {
+  await db.set(`game:${fid}`, state);
 }
 ```
 
-### Frame Actions
+## Game Actions
+
 ```typescript
-const gameActions = {
-  // Character Creation
-  createCharacter: () => {
-    sdk.actions.openUrl('/mint-character');
-  },
-
-  // Quest Interaction
-  startQuest: (questId: string) => {
-    sdk.actions.openUrl(`/quest/${questId}`);
-  },
-
-  // Combat Actions
-  performAction: (actionType: string) => {
-    // Handle combat actions through frame transitions
+// lib/actions.ts
+async function processGameAction({
+  action,
+  state,
+  fid
+}: {
+  action: string;
+  state: GameState;
+  fid: string;
+}) {
+  switch (action) {
+    case 'Start Game':
+      return handleStartGame(state);
+    
+    case 'Create Character':
+      return handleCharacterCreation(state, fid);
+    
+    case 'View Quests':
+      return handleQuestBoard(state);
+    
+    case 'Start Combat':
+      return handleCombat(state);
+    
+    default:
+      return handleMainMenu();
   }
-};
-```
+}
 
-## Frame Transitions
+async function handleStartGame(state: GameState) {
+  const imageUrl = await generateImage({
+    scene: 'CHARACTER_CREATION',
+    text: 'Choose Your Class'
+  });
 
-### Character Creation Flow
-```typescript
-interface CharacterCreationFrame {
-  image: {
-    url: string; // 1200x630 character creation screen
+  return {
+    newState: {
+      scene: 'CHARACTER_CREATION',
+      buttons: [
+        'Choose Warrior',
+        'Choose Mage',
+        'Choose Rogue',
+        'Back'
+      ]
+    },
+    imageUrl
   };
-  buttons: [
-    { text: "Select Class", action: "select_class" },
-    { text: "Customize", action: "customize" },
-    { text: "Confirm", action: "confirm" },
-    { text: "Back", action: "back" }
-  ];
 }
-```
 
-### Quest Board Flow
-```typescript
-interface QuestBoardFrame {
-  image: {
-    url: string; // 1200x630 quest board
-  };
-  buttons: [
-    { text: "Accept Quest", action: "accept_quest" },
-    { text: "View Details", action: "view_details" },
-    { text: "Next Quest", action: "next_quest" },
-    { text: "Character", action: "view_character" }
-  ];
-}
-```
+async function handleCharacterCreation(state: GameState, fid: string) {
+  // Create character NFT or DB entry
+  const imageUrl = await generateImage({
+    scene: 'CHARACTER_CREATED',
+    character: { /* character data */ }
+  });
 
-## Smart Contract Integration
-
-### Wallet Connection
-```typescript
-import { useAccount, useConnect } from 'wagmi';
-import { config } from '~/components/providers/WagmiProvider';
-
-function WalletConnection() {
-  const { address, isConnected } = useAccount();
-  const { connect } = useConnect();
-
-  return (
-    <button onClick={() => connect({ connector: config.connectors[0] })}>
-      {isConnected ? truncateAddress(address) : 'Connect Wallet'}
-    </button>
-  );
-}
-```
-
-### Transaction Handling
-```typescript
-import { useSendTransaction } from 'wagmi';
-
-function GameActions() {
-  const { sendTransaction } = useSendTransaction();
-
-  const mintCharacter = async () => {
-    sendTransaction({
-      to: CONTRACT_ADDRESS,
-      data: 'MINT_FUNCTION_SIGNATURE',
-    });
+  return {
+    newState: {
+      scene: 'MAIN_MENU',
+      character: { /* character data */ },
+      buttons: [
+        'View Quests',
+        'View Character',
+        'Inventory',
+        'Menu'
+      ]
+    },
+    imageUrl
   };
 }
 ```
 
 ## Image Generation
 
-### Frame Image Requirements
-- Dimensions: 1200x630px
-- Format: PNG/JPEG
-- Max size: 10MB
-- Content: Clear visual hierarchy
-
-### Dynamic Image Generation
 ```typescript
-interface FrameImage {
-  background: string;
-  character?: string;
-  ui_elements: {
-    health_bar?: string;
-    mana_bar?: string;
-    inventory_slots?: string[];
-  };
-  effects?: string[];
+// lib/images.ts
+import { createCanvas, loadImage } from 'canvas';
+
+async function generateImage({
+  scene,
+  text,
+  character,
+  quest
+}: {
+  scene: string;
+  text?: string;
+  character?: any;
+  quest?: any;
+}) {
+  // Create a 1200x630 canvas (recommended Frame dimensions)
+  const canvas = createCanvas(1200, 630);
+  const ctx = canvas.getContext('2d');
+
+  // Draw background
+  const bg = await loadImage(`/backgrounds/${scene}.png`);
+  ctx.drawImage(bg, 0, 0, 1200, 630);
+
+  // Add text
+  if (text) {
+    ctx.font = 'bold 48px Arial';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 600, 100);
+  }
+
+  // Add scene-specific elements
+  switch (scene) {
+    case 'CHARACTER_CREATION':
+      await drawCharacterClasses(ctx);
+      break;
+    case 'QUEST_BOARD':
+      await drawQuests(ctx, quest);
+      break;
+    case 'COMBAT':
+      await drawCombatScene(ctx, character);
+      break;
+  }
+
+  // Return image URL or buffer
+  return canvas.toBuffer('image/png');
+}
+```
+
+## Scene Flow Examples
+
+### 1. Main Menu
+```typescript
+// Initial frame
+{
+  image: '/images/main-menu.png',
+  buttons: [
+    'Start Game',
+    'How to Play',
+    'Leaderboard',
+    'About'
+  ]
+}
+```
+
+### 2. Character Creation
+```typescript
+// Character creation frame
+{
+  image: '/images/character-creation.png',
+  buttons: [
+    'Choose Warrior',
+    'Choose Mage',
+    'Choose Rogue',
+    'Back'
+  ]
+}
+```
+
+### 3. Quest Board
+```typescript
+// Quest board frame
+{
+  image: '/images/quest-board.png',
+  buttons: [
+    'Accept Quest',
+    'Next Quest',
+    'View Details',
+    'Back'
+  ]
+}
+```
+
+### 4. Combat
+```typescript
+// Combat frame
+{
+  image: '/images/combat.png',
+  buttons: [
+    'Attack',
+    'Use Item',
+    'Flee',
+    'Status'
+  ]
 }
 ```
 
 ## Error Handling
 
-### Frame Error States
 ```typescript
-interface ErrorFrame {
-  image: {
-    url: string; // Error state image
+// lib/errors.ts
+async function handleFrameError(error: Error) {
+  const errorImage = await generateImage({
+    scene: 'ERROR',
+    text: 'Something went wrong!'
+  });
+
+  return {
+    newState: {
+      scene: 'ERROR',
+      buttons: [
+        'Retry',
+        'Main Menu',
+        'Report Bug',
+        'Exit'
+      ]
+    },
+    imageUrl: errorImage
   };
-  buttons: [
-    { text: "Retry", action: "retry" },
-    { text: "Back", action: "back_to_main" }
-  ];
 }
 ```
 
-## Performance Optimization
+## Best Practices
 
-### Image Optimization
-- Pre-generate common backgrounds
-- Cache frequently used UI elements
-- Use efficient image formats
-- Implement lazy loading
+1. **Image Generation**
+   - Always use 1200x630 dimensions
+   - Keep file sizes small
+   - Pre-generate common images
+   - Cache generated images
 
-### State Management
-- Minimize state transitions
-- Cache frame responses
-- Optimize contract calls
-- Handle network latency
+2. **State Management**
+   - Keep state minimal
+   - Store state in a database
+   - Use player FID as key
+   - Handle state transitions cleanly
 
-## Security Considerations
+3. **Button Actions**
+   - Maximum 4 buttons per frame
+   - Clear, concise button text
+   - Consistent navigation patterns
+   - Handle all button states
 
-### Transaction Safety
-```typescript
-interface TransactionFrame {
-  image: {
-    url: string; // Transaction confirmation screen
-  };
-  buttons: [
-    { text: "Confirm", action: "confirm_tx" },
-    { text: "Cancel", action: "cancel_tx" }
-  ];
-}
-```
+4. **Performance**
+   - Cache frame responses
+   - Optimize image generation
+   - Handle errors gracefully
+   - Implement timeouts
 
-### Data Validation
-- Validate all user inputs
-- Verify frame signatures
-- Check transaction parameters
-- Implement rate limiting
+5. **User Experience**
+   - Clear feedback
+   - Consistent navigation
+   - Error recovery
+   - Progress persistence
 
-## Testing Guidelines
+This implementation provides a focused approach to building the game as a Farcaster Frame v2 application, handling:
+- Frame setup and routing
+- State management
+- Image generation
+- User interactions
+- Error handling
 
-### Frame Testing
-```typescript
-interface FrameTest {
-  description: string;
-  setup: () => void;
-  actions: {
-    input: any;
-    expectedOutput: any;
-  }[];
-  cleanup: () => void;
-}
-```
-
-### Integration Testing
-- Test wallet connections
-- Verify frame transitions
-- Check image generation
-- Validate contract interactions
+Would you like me to expand on any particular aspect?
